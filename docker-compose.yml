@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: clinica
+      POSTGRES_USER: clinica
+      POSTGRES_PASSWORD: clinica
+    ports:
+      - "5432:5432"
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "5672:5672"     # protocolo AMQP, el que usa la aplicación
+      - "15672:15672"   # consola web, usuario y clave: guest
