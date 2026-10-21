@@ -1,128 +1,215 @@
-# Historia clínica electrónica — arquitectura hexagonal
+# Hospital: historias clínicas con arquitectura hexagonal
 
-Misma estructura que `carnaval-tickets-st`, aplicada a otro negocio:
+El proyecto conserva la estructura de paquetes de `carnaval-tickets-st`, aplicada a historias clínicas.
+Tiene dos alternativas de almacenamiento: **memoria** y **MariaDB**. Al arrancar, la configuración comprueba la
+conexión: si MariaDB está disponible la utiliza; si no, arranca automáticamente en memoria. Docker puede estar
+cerrado o no estar instalado. Los casos de uso y el dominio son los mismos en ambos perfiles.
 
-> Centro médico con urgencias 24 horas. Médicos y enfermeras consultan la historia desde consultorios
-> y desde urgencias. En urgencias, no ver antecedentes y alergias a tiempo es un riesgo para la vida.
-> Los datos de salud están protegidos por habeas data. Un auditor puede pedir en cualquier momento
-> quién consultó o modificó una historia y cuándo. Unos 200 pacientes al día.
+## Estructura
 
-## Del enunciado a las reglas del dominio
+```text
+src/main/java/co/edu/ucc/clinica/
+├── ClinicaApplication.java
+└── historias/
+    ├── dominio/
+    ├── aplicacion/
+    │   ├── puertos/
+    │   │   ├── entrada/
+    │   │   └── salida/
+    │   └── servicios/
+    └── infraestructura/
+        ├── config/
+        ├── entrada/
+        └── salida/
+            ├── memoria/
+            └── jpa/
+```
 
-| Lo que dice el negocio | Dónde quedó |
+| Lugar | Responsabilidad |
 |---|---|
-| En urgencias hay que ver alergias y antecedentes **ya** | `PoliticaDeAcceso.autorizarConsulta`: en `URGENCIAS` nunca se bloquea ni se exige motivo. `HistoriaClinica.resumenDeUrgencias` muestra primero las alergias graves. Endpoint corto `/resumen-urgencias`. |
-| Datos sensibles (habeas data) | En `CONSULTORIO` se exige motivo. El `AUDITOR` no ve contenido clínico. Un usuario que no está en el directorio no entra. Cada acceso de urgencias avisa al oficial de protección de datos (`Notificador`). |
-| El auditor pregunta quién consultó o modificó y cuándo | `RegistroAcceso` + puerto `BitacoraDeAccesos` (solo agregar y leer). También se registran los intentos **denegados**, los de usuarios **que no son del centro** (`rol: null`) y las propias revisiones del auditor. |
-| Una historia clínica no se altera | Las notas, alergias y antecedentes solo se agregan; las correcciones son notas nuevas. El adaptador JPA solo hace inserciones. `Alergia`, `Antecedente` y `NotaClinica` no tienen constructor público: algo nuevo solo nace por los métodos de `HistoriaClinica`; los adaptadores usan `reconstruir`. |
-| Ningún dato clínico se filtra por accidente | Se autoriza antes de buscar (sin permiso no se revela si el paciente existe). El REST responde con DTOs propios, no con las clases del dominio. |
-| Roles distintos | La enfermera registra alergias y notas de enfermería; solo el médico registra antecedentes; el tipo de nota lo decide el rol. |
-| Cambio y rastro van juntos | `HistoriasConfig.Transacciones`: el cambio y su registro en la bitácora se confirman en la misma transacción. Un acceso denegado no cambia nada, pero su registro sí se confirma. |
-| MAR: registro de administración de medicamentos | Solo el médico prescribe (`HistoriaClinica.prescribir`), y nunca un medicamento al que el paciente es alérgico. Médicos y enfermeras registran cada dosis como `ADMINISTRADA`, `OMITIDA` o `RECHAZADA`; omitir o rechazar exige el motivo. Si la alergia aparece después de la orden, la dosis ya no se puede marcar como administrada. |
-| Eventos adversos a medicamentos | `reportarEventoAdverso` solo acepta medicamentos que sí se administraron. Un evento `GRAVE` registra la alergia automáticamente, así quedan bloqueadas nuevas órdenes y dosis. La comparación es por nombre exacto: no reconoce familias (penicilina / amoxicilina). |
-| 200 pacientes al día | Un monolito modular con Postgres sobra; no hace falta nada distribuido. |
+| `dominio` | Historia clínica, alergias, antecedentes, notas, profesionales, permisos y reglas de acceso. Solo depende de Java y del propio dominio. |
+| `aplicacion/puertos/entrada` | Siete casos de uso, sus comandos y solicitudes. |
+| `aplicacion/puertos/salida` | Contratos para consultar y guardar historias, registrar y consultar accesos, identificar profesionales, notificar y obtener la hora. |
+| `aplicacion/servicios` | Un servicio por caso de uso y auxiliares para identificación, lecturas, modificaciones y trazabilidad. No conocen Spring, HTTP, JPA ni implementaciones de almacenamiento. |
+| `infraestructura/entrada` | Controladores HTTP, solicitudes, respuestas DTO y traducción de errores del dominio. Dependen de los puertos de entrada. |
+| `infraestructura/salida/memoria` | Historias y bitácora en mapas y listas del proceso. |
+| `infraestructura/salida/jpa` | Adaptadores para MariaDB, entidades JPA, repositorios Spring Data y `MapeadorJpa`. Las entidades de persistencia están separadas del dominio. |
+| `infraestructura/salida` | Directorio de profesionales de ejemplo y notificador por consola. |
+| `infraestructura/config` | Ensambla los servicios, el reloj y las transacciones. |
 
-## Equivalencias con el proyecto del carnaval
+El recorrido es: HTTP → controlador → puerto de entrada → servicio → dominio y puertos de salida → adaptadores.
+En el código, los adaptadores implementan los puertos; la aplicación no importa los adaptadores.
 
-| carnaval-tickets-st | historia-clinica-st |
+`ComponentesComunesConfig` construye los auxiliares. `CasosDeUsoConfig` conecta cada servicio a su puerto de entrada.
+`SeleccionDeAlmacenamiento` elige el perfil antes de configurar JPA. Solo comprueba una conexión JDBC, sin invocar
+Docker. El chequeo tiene tiempos de espera acotados. El perfil `memoria` se puede forzar para omitir ese chequeo.
+En memoria se utiliza `SinTransaccion`; con MariaDB, `TransaccionConBitacora` confirma el cambio y su registro juntos.
+Cuando se deniega un acceso, se conserva el registro del intento y después se devuelve el error.
+
+## Funciones
+
+- Abrir y consultar una historia clínica.
+- Consultar el resumen de urgencias con las alergias graves primero.
+- Agregar alergias, antecedentes y notas, sin editar los registros anteriores.
+- Registrar quién accedió, cuándo, desde qué ámbito y si el acceso se permitió o denegó.
+- Consultar la bitácora con el rol de auditor.
+
+La medicación, las prescripciones, las administraciones de dosis y los eventos adversos se retiraron por la
+corrección del alcance: lo solicitado era **MariaDB**, la base de datos.
+
+| Regla | Implementación |
 |---|---|
-| `reservas/` | `historias/` |
-| `Reserva`, `Localidad` | `HistoriaClinica`, `Alergia`, `Antecedente`, `NotaClinica`, `Profesional`, `Prescripcion`, `Administracion`, `EventoAdverso` |
-| `EstadoReserva` | `Rol`, `Ambito`, `Severidad`, `TipoNota`, `TipoAcceso`, `ResultadoAcceso`, `EstadoAdministracion` |
-| `ReservarBoletasUseCase`, `PagarReservaUseCase` | `AbrirHistoriaUseCase`, `ConsultarHistoriaUseCase`, `ActualizarHistoriaUseCase`, `ConsultarBitacoraUseCase` |
-| `ReservaRepository`, `InventarioRepository` | `HistoriaClinicaRepository`, `BitacoraDeAccesos` |
-| `PasarelaDePagos` (+ `PasarelaDePagosFalsa`) | `DirectorioDeProfesionales` (+ `DirectorioDeProfesionalesFalso`) |
-| `Notificador` (correo al comprador) | `Notificador` (alerta al oficial de datos) |
-| `Reloj` | `Reloj` |
-| perfiles `memoria` / `postgres` | perfiles `memoria` / `postgres` |
+| En consultorio se exige motivo para consultar; en urgencias no. | `PoliticaDeAcceso`, `Ambito`. |
+| Médicos y enfermeras pueden consultar, abrir historias, registrar alergias y escribir notas. | `Rol`, `Permiso`, `HistoriaClinica`. |
+| Solo el médico registra antecedentes. | `Permiso.REGISTRAR_ANTECEDENTE`. |
+| El tipo de nota depende del rol. | `Rol.tipoDeNota`. |
+| El auditor consulta accesos y no el contenido clínico. | `PoliticaDeAcceso.autorizarAuditoria`. |
+| Los intentos denegados y los profesionales desconocidos dejan rastro. | `IdentificacionDeProfesionales`, `RastroDeAccesos`. |
+| Los accesos permitidos de urgencias avisan al oficial de datos. | `AvisoAlOficialDeDatos` mediante `Notificador`. |
 
-```
-src/main/java/co/edu/ucc/clinica/historias/
-├── dominio/                      reglas puras, sin Spring
-├── aplicacion/
-│   ├── puertos/entrada/          casos de uso
-│   ├── puertos/salida/           lo que el dominio necesita del mundo
-│   └── servicios/                orquestan: identificar, decidir (dominio), guardar, dejar rastro
-│                                 (Trazabilidad reúne lo común: directorio, bitácora, aviso)
-└── infraestructura/
-    ├── config/                   arma los servicios y las transacciones
-    ├── entrada/                  REST
-    └── salida/                   memoria/, jpa/, notificador y directorio
+El directorio de ejemplo y el notificador de consola son adaptadores de demostración.
+El notificador solo imprime; las cabeceras identifican al profesional y al ámbito en esta aplicación de ejemplo.
+
+## Ejecutar, incluso con Docker cerrado
+
+Requiere Java 21. Maven se ejecuta mediante el wrapper incluido.
+
+```powershell
+.\mvnw.cmd spring-boot:run
 ```
 
-Las fronteras entre módulos las verifica Spring Modulith en `ModulosTest` (`modulos.verify()`), que además genera la documentación de módulos en `target/spring-modulith-docs`.
+Si MariaDB no responde, Hospital selecciona `memoria` y arranca sin crear una conexión de datos ni inicializar JPA.
+Los pacientes de ejemplo se cargan desde `HistoriaEnMemoria`. Los cambios en memoria duran mientras vive el proceso;
+no se sincronizan automáticamente con MariaDB. La selección se realiza al arrancar.
 
-## Requisitos
+Para trabajar siempre en memoria sin comprobar el servidor:
 
-- Java 21
-- Spring Boot 4.1.1 + Spring Modulith (vienen en el `pom.xml`; se usa el wrapper `./mvnw`)
-- Docker, solo para el perfil `postgres` (`docker-compose.yml` levanta la base `clinica`)
-
-## Ejecutar
-
-```bash
-./mvnw test                                    # 45 pruebas (dominio, servicios, módulos y arranque)
-./mvnw spring-boot:run                         # perfil memoria (por defecto)
-docker compose up -d postgres
-./mvnw spring-boot:run -Dspring-boot.run.profiles=postgres
+```powershell
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=memoria"
 ```
 
-Usuarios de ejemplo (cabecera `X-Profesional`): `med-01`, `med-02` (médicos), `enf-01` (enfermera), `aud-01` (auditora).
-Ámbito (cabecera `X-Ambito`): `CONSULTORIO` o `URGENCIAS`.
-Pacientes cargados: `1085123456` y `27089123`.
+## Ejecutar con MariaDB sin Docker
 
-> En producción el profesional saldría del token de sesión y el ámbito de la red o terminal, no de cabeceras libres.
+La aplicación se conecta por JDBC a una instalación normal de MariaDB, local o remota. No ejecuta Docker ni
+necesita que Docker esté instalado. El servicio MariaDB debe estar iniciado, igual que cualquier servidor de base de datos.
 
-```bash
-# Urgencias: sin motivo, alergias graves primero
-curl localhost:8080/historias/1085123456/resumen-urgencias -H "X-Profesional: med-01"
+En una instalación local, un administrador puede preparar la base y el usuario una sola vez:
 
-# Consultorio: sin motivo -> 403; con motivo -> 200
-curl "localhost:8080/historias/1085123456?motivo=Control" -H "X-Profesional: med-02"
-
-# Registrar alergia (enfermera)
-curl -X POST localhost:8080/historias/1085123456/alergias -H "X-Profesional: enf-01" \
-     -H "Content-Type: application/json" -d '{"sustancia":"Latex","severidad":"MODERADA","reaccion":"Rash"}'
-
-# MAR: prescribir (médico), registrar la dosis (enfermera), reportar un evento adverso
-curl -X POST localhost:8080/historias/27089123/prescripciones -H "X-Profesional: med-02" \
-     -H "Content-Type: application/json" -d '{"medicamento":"Dipirona","dosis":"1 g","via":"IV","frecuencia":"Cada 8 horas"}'
-curl -X POST localhost:8080/historias/27089123/prescripciones/{prescripcionId}/administraciones -H "X-Profesional: enf-01" \
-     -H "Content-Type: application/json" -d '{"estado":"ADMINISTRADA"}'
-curl -X POST localhost:8080/historias/27089123/prescripciones/{prescripcionId}/eventos-adversos -H "X-Profesional: enf-01" \
-     -H "Content-Type: application/json" -d '{"descripcion":"Hipotensión","severidad":"GRAVE"}'
-
-# Prescribir penicilina a 1085123456 (alérgica) -> 422
-curl -X POST localhost:8080/historias/1085123456/prescripciones -H "X-Profesional: med-01" \
-     -H "Content-Type: application/json" -d '{"medicamento":"Penicilina","dosis":"1 MUI","via":"IM","frecuencia":"Única"}'
-
-# Bitácora (solo auditor)
-curl localhost:8080/historias/1085123456/bitacora -H "X-Profesional: aud-01"
+```sql
+CREATE DATABASE IF NOT EXISTS clinica CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'clinica'@'localhost' IDENTIFIED BY 'clinica';
+GRANT ALL PRIVILEGES ON clinica.* TO 'clinica'@'localhost';
 ```
 
-Códigos HTTP: `403` acceso denegado, `404` historia inexistente, `422` regla de negocio violada.
+Después se inicia el backend:
 
-### Endpoints
+```powershell
+.\mvnw.cmd spring-boot:run
+```
 
-Todos van bajo `/historias` y exigen la cabecera `X-Profesional`. `X-Ambito` vale por defecto `CONSULTORIO`, salvo en el resumen de urgencias, donde vale `URGENCIAS`.
+Con la base accesible se selecciona `mariadb`. Incluso si se solicita expresamente ese perfil y la conexión no
+responde, la configuración permite arrancar con memoria.
+
+Spring crea las tablas mediante JPA y luego ejecuta `data.sql`. El script puede ejecutarse nuevamente sin duplicar
+los pacientes y registros iniciales ni reemplazar los existentes. Los instantes se guardan en UTC; el dominio
+calcula las fechas del centro en `America/Bogota`.
+
+La conexión se ajusta con estas variables:
+
+| Variable | Predeterminado | Uso |
+|---|---|---|
+| `DB_HOST` | `localhost` | Servidor MariaDB. |
+| `DB_PORT` | `3306` | Puerto de conexión y puerto publicado por Compose. |
+| `DB_NAME` | `clinica` | Base de datos. |
+| `DB_USER` | `clinica` | Usuario de la aplicación. |
+| `DB_PASSWORD` | `clinica` | Contraseña local de la aplicación. |
+| `DB_ROOT_PASSWORD` | `clinica-root` | Contraseña root del contenedor; la aplicación no la utiliza. |
+
+Ejemplo en PowerShell:
+
+```powershell
+$env:DB_HOST = 'localhost'
+$env:DB_PORT = '3306'
+$env:DB_NAME = 'clinica'
+$env:DB_USER = 'clinica'
+$env:DB_PASSWORD = 'clinica'
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=mariadb"
+```
+
+## Docker es una alternativa opcional
+
+Si se prefiere disponer de MariaDB en un contenedor, se incluye `docker-compose.yml`. El contenedor proporciona
+el mismo servidor al que se conecta el adaptador JPA; la aplicación no conoce cómo se inició ese servidor.
+
+```powershell
+docker compose up -d --wait mariadb
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=mariadb"
+```
+
+Compose utiliza MariaDB 11.8 y un volumen para conservar los datos. No interviene al ejecutar con memoria ni
+al conectarse a una instalación normal de MariaDB.
+
+## SOLID dentro de la estructura de Carnaval
+
+| Principio | Aplicación en Hospital |
+|---|---|
+| Responsabilidad única | Dominio para reglas; servicios para coordinar; controladores para HTTP; mapeador para conversión JPA; configuración para ensamblaje y transacciones. |
+| Abierto a extensión | Se pueden agregar adaptadores de los puertos y oyentes de accesos sin cambiar el dominio ni los servicios que los utilizan. |
+| Sustitución | Memoria y JPA implementan los mismos puertos. El mismo contrato HTTP se comprueba con ambos perfiles. |
+| Segregación de interfaces | Un puerto por caso de uso; lectura y escritura de historias y de bitácora tienen contratos separados. |
+| Inversión de dependencias | Los servicios reciben puertos por constructor. Spring y los adaptadores quedan en infraestructura. |
+
+## API
+
+Todas las rutas están bajo `/historias` y requieren `X-Profesional`.
+`X-Ambito` vale `CONSULTORIO` por defecto, salvo en el resumen de urgencias, donde vale `URGENCIAS`.
+
+Profesionales de ejemplo: `med-01`, `med-02`, `enf-01`, `aud-01`.
+Pacientes iniciales: `1085123456` y `27089123`.
 
 | Método | Ruta | Cuerpo | Quién |
 |---|---|---|---|
-| `POST` | `/historias` | `{documento, nombre, fechaNacimiento}` | médico o enfermera |
-| `GET` | `/{documento}?motivo=...` | — | médico o enfermera (motivo obligatorio en consultorio) |
-| `GET` | `/{documento}/resumen-urgencias` | — | médico o enfermera |
-| `POST` | `/{documento}/alergias` | `{sustancia, severidad, reaccion}` | médico o enfermera |
-| `POST` | `/{documento}/antecedentes` | `{descripcion}` | solo médico |
-| `POST` | `/{documento}/notas` | `{texto}` | médico o enfermera (el tipo de nota lo decide el rol) |
-| `POST` | `/{documento}/prescripciones` | `{medicamento, dosis, via, frecuencia}` | solo médico |
-| `POST` | `/{documento}/prescripciones/{id}/administraciones` | `{estado, observacion}` | médico o enfermera |
-| `POST` | `/{documento}/prescripciones/{id}/eventos-adversos` | `{descripcion, severidad}` | médico o enfermera |
-| `GET` | `/{documento}/bitacora` | — | solo auditor |
+| `POST` | `/historias` | `{documento, nombre, fechaNacimiento}` | Médico o enfermera. |
+| `GET` | `/historias/{documento}?motivo=...` | — | Médico o enfermera. |
+| `GET` | `/historias/{documento}/resumen-urgencias` | — | Médico o enfermera. |
+| `POST` | `/historias/{documento}/alergias` | `{sustancia, severidad, reaccion}` | Médico o enfermera. |
+| `POST` | `/historias/{documento}/antecedentes` | `{descripcion}` | Médico. |
+| `POST` | `/historias/{documento}/notas` | `{texto}` | Médico o enfermera. |
+| `GET` | `/historias/{documento}/bitacora` | — | Auditor. |
 
-La consulta completa devuelve también el MAR: cada prescripción con sus dosis y sus eventos adversos.
+Las respuestas usan DTO propios de la entrada HTTP. Códigos de error: `403` acceso denegado,
+`404` historia inexistente y `422` regla de negocio violada.
 
-## Ideas para seguir
+```powershell
+curl.exe "http://localhost:8080/historias/1085123456/resumen-urgencias" -H "X-Profesional: med-01"
+curl.exe "http://localhost:8080/historias/1085123456?motivo=Control" -H "X-Profesional: med-01"
+curl.exe "http://localhost:8080/historias/1085123456/bitacora" -H "X-Profesional: aud-01"
+```
 
-- En Postgres, quitar `UPDATE` y `DELETE` sobre `registro_acceso` al usuario de la aplicación.
-- Reemplazar `DirectorioDeProfesionalesFalso` por un adaptador real (perfil `identidad-remota`).
-- Un adaptador de `Notificador` por correo (perfil `correo`).
+## Verificación
+
+```powershell
+.\mvnw.cmd -B clean test
+```
+
+Incluye pruebas del dominio, servicios sin Spring, módulos, arranque, siete reglas de arquitectura con ArchUnit
+y pruebas HTTP. `ArranqueSinBaseDeDatosTest` solicita MariaDB en un puerto sin servidor y comprueba que los casos
+de uso funcionan con memoria y sin un `DataSource`. `ArquitecturaHexagonalTest` comprueba la estructura de paquetes y evita dependencias del núcleo
+hacia Spring o infraestructura, y dependencias directas de los controladores hacia servicios o persistencia.
+Spring Modulith sigue comprobando los módulos y genera documentación en `target/spring-modulith-docs`.
+
+Con MariaDB disponible, el mismo contrato HTTP puede verificarse contra la base real:
+
+```powershell
+.\mvnw.cmd -B test "-Dtest=HistoriasHttpTest" "-Dspring.profiles.active=mariadb"
+```
+
+Las pruebas HTTP agregan un paciente con un documento único de prueba; para ejecutarlas conviene seleccionar
+una base de pruebas mediante `DB_NAME`.
+
+## Referencia del curso
+
+La separación de responsabilidades y las dependencias siguen las diapositivas del Módulo 2 aportadas por el usuario:
+SOLID (2 y 25), independencia de Docker (24 y 50), núcleo sin frameworks y ensamble (58), estructura de paquetes (62)
+y errores que se deben evitar (67). Los ejemplos de descuentos, ingreso, pagos y colas ilustran conceptos del curso;
+no agregan requisitos funcionales a Hospital.

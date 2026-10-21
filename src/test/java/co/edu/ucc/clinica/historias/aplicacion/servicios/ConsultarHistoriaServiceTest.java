@@ -4,17 +4,18 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
-import co.edu.ucc.clinica.historias.aplicacion.puertos.entrada.ConsultarHistoriaUseCase.Solicitud;
+import co.edu.ucc.clinica.historias.aplicacion.puertos.entrada.SolicitudDeConsulta;
 import co.edu.ucc.clinica.historias.dominio.*;
 
 class ConsultarHistoriaServiceTest {
     final Falsos f = new Falsos();
-    final ConsultarHistoriaService servicio = new ConsultarHistoriaService(f.historias, f.trazabilidad);
+    final ConsultarHistoriaService servicio = new ConsultarHistoriaService(f.lectura);
+    final ConsultarResumenDeUrgenciasService resumen = new ConsultarResumenDeUrgenciasService(f.lectura, f.reloj);
 
     @Test
     void cadaConsultaQuedaEnLaBitacora() {
         f.conPaciente("1085");
-        servicio.consultar(new Solicitud("med-01", Ambito.CONSULTORIO, "1085", "Control"));
+        servicio.consultar(new SolicitudDeConsulta("med-01", Ambito.CONSULTORIO, "1085", "Control"));
         var registro = f.bitacora.registros.getFirst();
         assertEquals("med-01", registro.profesionalId());
         assertEquals(TipoAcceso.CONSULTA, registro.tipo());
@@ -26,8 +27,8 @@ class ConsultarHistoriaServiceTest {
     @Test
     void enUrgenciasVeLasAlergiasSinMotivoYSeAvisaAlOficialDeDatos() {
         f.conPaciente("1085");
-        var resumen = servicio.resumenDeUrgencias(new Solicitud("med-01", Ambito.URGENCIAS, "1085", null));
-        assertEquals("Penicilina", resumen.alergias().getFirst().sustancia());
+        var r = resumen.consultar(new SolicitudDeConsulta("med-01", Ambito.URGENCIAS, "1085", null));
+        assertEquals("Penicilina", r.alergias().getFirst().sustancia());
         assertEquals(TipoAcceso.CONSULTA_URGENCIAS, f.bitacora.registros.getFirst().tipo());
         assertEquals(1, f.notificador.alertas.size());
     }
@@ -36,7 +37,7 @@ class ConsultarHistoriaServiceTest {
     void elAccesoDenegadoTambienQuedaEnLaBitacora() {
         f.conPaciente("1085");
         assertThrows(AccesoDenegadoException.class,
-                () -> servicio.consultar(new Solicitud("aud-01", Ambito.CONSULTORIO, "1085", "Curiosidad")));
+                () -> servicio.consultar(new SolicitudDeConsulta("aud-01", Ambito.CONSULTORIO, "1085", "Curiosidad")));
         var registro = f.bitacora.registros.getFirst();
         assertEquals("aud-01", registro.profesionalId());
         assertEquals(ResultadoAcceso.DENEGADO, registro.resultado());
@@ -46,7 +47,7 @@ class ConsultarHistoriaServiceTest {
     void sinPermisoNoSeRevelaSiElPacienteExiste() {
         // el documento 999 no existe: aun así la respuesta es "acceso denegado", no "no encontrada"
         assertThrows(AccesoDenegadoException.class,
-                () -> servicio.consultar(new Solicitud("aud-01", Ambito.CONSULTORIO, "999", "Revisión")));
+                () -> servicio.consultar(new SolicitudDeConsulta("aud-01", Ambito.CONSULTORIO, "999", "Revisión")));
         assertEquals(ResultadoAcceso.DENEGADO, f.bitacora.registros.getFirst().resultado());
     }
 
@@ -54,7 +55,7 @@ class ConsultarHistoriaServiceTest {
     void unUsuarioDesconocidoNoEntraPeroSuIntentoQuedaEnLaBitacora() {
         f.conPaciente("1085");
         assertThrows(AccesoDenegadoException.class,
-                () -> servicio.consultar(new Solicitud("intruso", Ambito.URGENCIAS, "1085", null)));
+                () -> servicio.consultar(new SolicitudDeConsulta("intruso", Ambito.URGENCIAS, "1085", null)));
         var registro = f.bitacora.registros.getFirst();
         assertEquals("intruso", registro.profesionalId());
         assertTrue(registro.esDeDesconocido());
@@ -66,7 +67,7 @@ class ConsultarHistoriaServiceTest {
     @Test
     void sinIdentificadorTambienQuedaRegistrado() {
         assertThrows(AccesoDenegadoException.class,
-                () -> servicio.consultar(new Solicitud(null, Ambito.CONSULTORIO, "1085", "x")));
+                () -> servicio.consultar(new SolicitudDeConsulta(null, Ambito.CONSULTORIO, "1085", "x")));
         assertEquals("(vacío)", f.bitacora.registros.getFirst().profesionalId());
     }
 }

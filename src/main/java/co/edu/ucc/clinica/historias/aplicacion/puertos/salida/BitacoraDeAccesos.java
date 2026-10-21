@@ -1,11 +1,8 @@
 package co.edu.ucc.clinica.historias.aplicacion.puertos.salida;
 
-import java.util.List;
-
-import co.edu.ucc.clinica.historias.dominio.RegistroAcceso;
-
-/** Solo se agrega y se lee: la bitácora nunca se modifica ni se borra. */
-public interface BitacoraDeAccesos {
-    void registrar(RegistroAcceso registro);
-    List<RegistroAcceso> deHistoria(String documento); // en orden cronológico
+/**
+ * La bitácora completa, para los adaptadores (memoria, JPA). Cada servicio pide solo la mitad que usa:
+ * {@link RegistroDeAccesos} para escribir o {@link ConsultaDeAccesos} para leer.
+ */
+public interface BitacoraDeAccesos extends RegistroDeAccesos, ConsultaDeAccesos {
 }

@@ -36,10 +36,14 @@ class Falsos {
             "enf-01", new Profesional("enf-01", "Enf. Luis Benavides", Rol.ENFERMERA),
             "aud-01", new Profesional("aud-01", "Carmen Ortiz", Rol.AUDITOR)).get(id));
 
+    final Reloj reloj = () -> AHORA;
     final Historias historias = new Historias();
     final Bitacora bitacora = new Bitacora();
     final NotificadorFalso notificador = new NotificadorFalso();
-    final Trazabilidad trazabilidad = new Trazabilidad(DIRECTORIO, bitacora, notificador, () -> AHORA);
+    final RastroDeAccesos rastro = new RastroDeAccesos(bitacora, List.of(new AvisoAlOficialDeDatos(notificador)), reloj);
+    final IdentificacionDeProfesionales identificacion = new IdentificacionDeProfesionales(DIRECTORIO, rastro);
+    final ModificadorDeHistorias modificador = new ModificadorDeHistorias(historias, identificacion, rastro);
+    final LecturaDeHistorias lectura = new LecturaDeHistorias(historias, identificacion, rastro);
 
     HistoriaClinica conPaciente(String documento) {
         var h = HistoriaClinica.abrir(documento, "María Guerrero", java.time.LocalDate.of(1980, 5, 12),

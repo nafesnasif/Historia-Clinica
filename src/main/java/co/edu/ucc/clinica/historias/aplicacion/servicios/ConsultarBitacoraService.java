@@ -3,29 +3,32 @@ package co.edu.ucc.clinica.historias.aplicacion.servicios;
 import java.util.List;
 
 import co.edu.ucc.clinica.historias.aplicacion.puertos.entrada.ConsultarBitacoraUseCase;
-import co.edu.ucc.clinica.historias.aplicacion.puertos.salida.BitacoraDeAccesos;
-import co.edu.ucc.clinica.historias.dominio.*;
+import co.edu.ucc.clinica.historias.aplicacion.puertos.salida.ConsultaDeAccesos;
+import co.edu.ucc.clinica.historias.dominio.PoliticaDeAcceso;
+import co.edu.ucc.clinica.historias.dominio.Profesional;
+import co.edu.ucc.clinica.historias.dominio.RegistroAcceso;
+import co.edu.ucc.clinica.historias.dominio.TipoAcceso;
 
 public class ConsultarBitacoraService implements ConsultarBitacoraUseCase {
-    private final BitacoraDeAccesos bitacora;
-    private final Trazabilidad trazabilidad;
+    private final ConsultaDeAccesos bitacora;
+    private final IdentificacionDeProfesionales identificacion;
+    private final RastroDeAccesos rastro;
 
-    public ConsultarBitacoraService(BitacoraDeAccesos bitacora, Trazabilidad trazabilidad) {
+    public ConsultarBitacoraService(ConsultaDeAccesos bitacora, IdentificacionDeProfesionales identificacion,
+                                    RastroDeAccesos rastro) {
         this.bitacora = bitacora;
-        this.trazabilidad = trazabilidad;
+        this.identificacion = identificacion;
+        this.rastro = rastro;
     }
 
     @Override
-    public List<RegistroAcceso> consultar(String auditorId, Ambito ambito, String documento) {
-        Profesional p = trazabilidad.identificar(auditorId, documento, ambito, TipoAcceso.AUDITORIA);
-        try {
+    public List<RegistroAcceso> consultar(Solicitud s) {
+        Profesional p = identificacion.identificar(s, TipoAcceso.AUDITORIA);
+        return rastro.registrandoNegativas(s.documento(), p, s.ambito(), TipoAcceso.AUDITORIA, () -> {
             PoliticaDeAcceso.autorizarAuditoria(p);
-            List<RegistroAcceso> registros = bitacora.deHistoria(documento); // se lee antes de anotar esta revisión
-            trazabilidad.permitido(documento, p, ambito, TipoAcceso.AUDITORIA, "Revisión de bitácora");
+            List<RegistroAcceso> registros = bitacora.deHistoria(s.documento()); // se lee antes de anotar esta revisión
+            rastro.permitido(s.documento(), p, s.ambito(), TipoAcceso.AUDITORIA, "Revisión de bitácora");
             return registros;
-        } catch (AccesoDenegadoException e) {
-            trazabilidad.denegado(documento, p, ambito, TipoAcceso.AUDITORIA, e.getMessage());
-            throw e;
-        }
+        });
     }
 }

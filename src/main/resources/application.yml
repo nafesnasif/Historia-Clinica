@@ -2,7 +2,7 @@ spring:
   application:
     name: historia-clinica
   profiles:
-    default: memoria          # si nadie pide otro perfil, se usa memoria
+    default: memoria          # respaldo; SeleccionDeAlmacenamiento detecta MariaDB antes de cargar los perfiles
   jpa:
     open-in-view: false
 ---
@@ -19,14 +19,20 @@ spring:
 spring:
   config:
     activate:
-      on-profile: postgres
+      on-profile: mariadb
   datasource:
-    url: jdbc:postgresql://localhost:5432/clinica
-    username: clinica
-    password: clinica
+    url: jdbc:mariadb://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:clinica}
+    driver-class-name: org.mariadb.jdbc.Driver
+    username: ${DB_USER:clinica}
+    password: ${DB_PASSWORD:clinica}
+    hikari:
+      connection-timeout: 2000
+      validation-timeout: 1000
   jpa:
     hibernate:
       ddl-auto: update
+    properties:
+      hibernate.jdbc.time_zone: UTC
     defer-datasource-initialization: true   # data.sql corre después de crear las tablas
   sql:
     init:

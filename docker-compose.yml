@@ -1,14 +1,25 @@
 services:
-  postgres:
-    image: postgres:16
+  mariadb:
+    image: mariadb:11.8
     environment:
-      POSTGRES_DB: clinica
-      POSTGRES_USER: clinica
-      POSTGRES_PASSWORD: clinica
+      MARIADB_DATABASE: ${DB_NAME:-clinica}
+      MARIADB_USER: ${DB_USER:-clinica}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-clinica}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-clinica-root}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
     ports:
-      - "5432:5432"
-  rabbitmq:
-    image: rabbitmq:4-management
-    ports:
-      - "5672:5672"     # protocolo AMQP, el que usa la aplicación
-      - "15672:15672"   # consola web, usuario y clave: guest
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - clinica_mariadb:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  clinica_mariadb:

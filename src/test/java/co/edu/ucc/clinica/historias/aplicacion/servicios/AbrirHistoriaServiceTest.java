@@ -11,7 +11,7 @@ import co.edu.ucc.clinica.historias.dominio.*;
 
 class AbrirHistoriaServiceTest {
     final Falsos f = new Falsos();
-    final AbrirHistoriaService servicio = new AbrirHistoriaService(f.historias, f.trazabilidad);
+    final AbrirHistoriaService servicio = new AbrirHistoriaService(f.historias, f.identificacion, f.rastro, f.reloj);
 
     @Test
     void abrirDejaRastroDeApertura() {

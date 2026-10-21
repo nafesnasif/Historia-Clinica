@@ -1,46 +1,18 @@
 package co.edu.ucc.clinica.historias.aplicacion.servicios;
 
 import co.edu.ucc.clinica.historias.aplicacion.puertos.entrada.ConsultarHistoriaUseCase;
-import co.edu.ucc.clinica.historias.aplicacion.puertos.salida.HistoriaClinicaRepository;
-import co.edu.ucc.clinica.historias.dominio.*;
+import co.edu.ucc.clinica.historias.aplicacion.puertos.entrada.SolicitudDeConsulta;
+import co.edu.ucc.clinica.historias.dominio.HistoriaClinica;
 
 public class ConsultarHistoriaService implements ConsultarHistoriaUseCase {
-    private final HistoriaClinicaRepository historias;
-    private final Trazabilidad trazabilidad;
+    private final LecturaDeHistorias lectura;
 
-    public ConsultarHistoriaService(HistoriaClinicaRepository historias, Trazabilidad trazabilidad) {
-        this.historias = historias;
-        this.trazabilidad = trazabilidad;
+    public ConsultarHistoriaService(LecturaDeHistorias lectura) {
+        this.lectura = lectura;
     }
 
     @Override
-    public HistoriaClinica consultar(Solicitud s) {
-        return autorizarYLeer(s, "Historia completa");
-    }
-
-    @Override
-    public ResumenDeUrgencias resumenDeUrgencias(Solicitud s) {
-        return autorizarYLeer(s, "Resumen de urgencias").resumenDeUrgencias(trazabilidad.reloj().ahora());
-    }
-
-    private HistoriaClinica autorizarYLeer(Solicitud s, String que) {
-        var intento = s.ambito() == Ambito.URGENCIAS ? TipoAcceso.CONSULTA_URGENCIAS : TipoAcceso.CONSULTA;
-        Profesional p = trazabilidad.identificar(s.profesionalId(), s.documento(), s.ambito(), intento);
-        // Primero se autoriza: a quien no tiene permiso no se le dice ni siquiera si el paciente existe.
-        TipoAcceso tipo;
-        try {
-            tipo = PoliticaDeAcceso.autorizarConsulta(p, s.ambito(), s.motivo());
-        } catch (AccesoDenegadoException e) {
-            trazabilidad.denegado(s.documento(), p, s.ambito(), intento, e.getMessage());
-            throw e;
-        }
-        HistoriaClinica historia = historias.buscarPorDocumento(s.documento())
-                .orElseThrow(() -> new HistoriaNoEncontradaException(s.documento()));
-        trazabilidad.permitido(s.documento(), p, s.ambito(), tipo, que + ": " + motivoO(s.motivo()));
-        return historia;
-    }
-
-    private static String motivoO(String motivo) {
-        return motivo == null || motivo.isBlank() ? "sin motivo indicado" : motivo;
+    public HistoriaClinica consultar(SolicitudDeConsulta s) {
+        return lectura.leer(s, "Historia completa");
     }
 }

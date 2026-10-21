@@ -1,0 +1,1 @@
+org.springframework.boot.EnvironmentPostProcessor=co.edu.ucc.clinica.historias.infraestructura.config.SeleccionDeAlmacenamiento

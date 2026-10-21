@@ -2,8 +2,13 @@ package co.edu.ucc.clinica.historias.dominio;
 
 public record Profesional(String id, String nombre, Rol rol) {
 
-    /** Médicos y enfermeras atienden pacientes; el auditor no. */
-    public boolean esAsistencial() {
-        return rol == Rol.MEDICO || rol == Rol.ENFERMERA;
+    public boolean puede(Permiso permiso) {
+        return rol != null && rol.permite(permiso);
+    }
+
+    /** Lanza AccesoDenegadoException si el rol no tiene el permiso. */
+    public void exigir(Permiso permiso) {
+        if (!puede(permiso))
+            throw new AccesoDenegadoException("El rol " + rol + " no puede " + permiso.descripcion());
     }
 }
